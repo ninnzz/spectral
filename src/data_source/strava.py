@@ -80,6 +80,7 @@ def get_segment_effort(
 
     data = r.json()
 
+    print(data)
     for i in data:
         print(i)
 

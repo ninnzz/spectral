@@ -18,7 +18,7 @@ def main():
     # get_segments(conf, p1, p2)
     segments = get_starred_segments(conf)
 
-    # get_segment_effort(conf, segments[0].id, start, end)
+    get_segment_effort(conf, segments[0].id, start, end)
 
 
 if __name__ == "__main__":
