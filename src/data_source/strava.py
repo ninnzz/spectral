@@ -67,11 +67,11 @@ def get_segment_effort(
     header = {"Authorization": f"Bearer {conf.strava_access_token}"}
     params = {
         "segment_id": segment_id,
-        "start_date_local": start,
-        "end_date_local": end,
+        "start_date_local": start.isoformat(),
+        "end_date_local": end.isoformat(),
         "per_page": per_page,
     }
-
+    print(params)
     r = requests.get(url, params=params, headers=header)
 
     if r.status_code != 200:
