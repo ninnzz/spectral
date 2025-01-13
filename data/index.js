@@ -1,124 +1,183 @@
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { writeFileSync } from 'fs';
 
 puppeteer.use(StealthPlugin());
 
-async function getData(page) {
+async function getTh(page) {
+	return await page.$$eval('.table1 thead th', th => {
+  		return th.map(col => {
+  			if (col.textContent.trim() != '') {
+  				return col.textContent.trim();
+  			} else {
+  				return col.id
+  			}
+  		})
+  })
+}
 
-	const tblTitles = await page.$$eval('.table1 thead th', tHeaders => {
-		return tHeaders.map(th => {
-			// const firstChild = th.firstChild;
-			return th.textContent.trim();
-		})
-	})
 
-	const data = await page.$$eval('.table1 tbody tr', (rows, tblTitles) => {
-		const rowData = [];
+async function getTr(page) {
+	const rideLogLinks = [];
 
-
-		rows.forEach(row => {
+  return await page.$$eval('.table1 tbody tr', (rows, rideLogLinks) => {
+		const rowsInfo = rows.map(row => {
 			const cols = Array.from(row.querySelectorAll('td'));
+			const link = row.querySelector('a');
+			const rowInfo = [];
 
-			const dateString = cols[1].textContent.trim().split(" ")[0];
-			const date = new Date(dateString);
-
-			const lowerDate = new Date(2024, 0, 1);
-			const UpperDate = new Date(2025, 1, 1);
-
-			if (date >= lowerDate && date < UpperDate) {
-				const rowInfo = {}
-
-				cols.forEach((col, idx) => {
-					const colText = col.textContent.trim();
-
-					// dist nd climb
-					if ((tblTitles[idx] === 'dist' 
-						|| tblTitles[idx] === 'climb') 
-						&& col.textContent.trim().includes("km")) {
-
-							// km to m
-							const km = colText.split(" ")[0];
-							const m = parseFloat(km) * 1000;
-							rowData[tblTitles[idx]] = String(m) + " m";
-
-					} else if (tblTitles[idx] === 'created') {
-						const createdArr = colText.split(" ");
-
-						const time = createdArr[1];
-						const ampm = createdArr[2].substring(0, 2).toLowerCase();
-
-						let [hr, min] = time.split(":").map(Number);
-						const [yr, month, day] = dateString.split("-").map(Number);
-
-						hr %= 12;
-						if (ampm == 'pm') {
-							hr += 12;
-						}
-
-						const dateISO = new Date(yr, month - 1, day, hr, min, 0, 0).toISOString();
-
-						rowInfo[tblTitles[idx]] = dateISO;
-
-
-						const isSensitiveTrail = (createdArr[createdArr.length - 1] == "s");
-						if (isSensitiveTrail) {
-							rowInfo["sensitiveTrail"] = isSensitiveTrail;
-						}
-					} else if (rowInfo[tblTitles[idx]] !== "" && colText !== "") {
-						rowInfo[tblTitles[idx]] = colText;
+			cols.forEach((col, idx) => {
+				if (col.textContent.trim() != '') {
+					rowInfo.push(col.textContent.trim());
+				} else {
+					const span = col.querySelector('span');
+					if (span != null) {
+						rowInfo.push(span.title.split("/")[0].trim());
+					} else {
+						rowInfo.push(span);
 					}
-				})
-				rowData.push(rowInfo);
+				}
+			})
+
+			rideLogLinks.push(link.href.trim() + 'ridelogs');
+			return rowInfo;
+		})
+
+		return {rowsInfo, rideLogLinks}
+	}, rideLogLinks);
+}
+
+
+async function getRideLogs(page, url) {
+	const rideLogs = [];
+
+  try {
+  	const rideLogsTh = await getTh(page);
+  	// console.log(rideLogsTh);
+
+  	const rideLogsTr = await getTr(page);
+  	// console.log(rideLogsTr);
+
+  	rideLogsTr['rowsInfo'].forEach((rideLog) => {
+  		const rowInfo = new Object();
+  		rideLog.forEach((rideLogInfo, idx) => {
+  			const lbl = rideLogsTh[idx];
+
+  			// km to m
+				if (['distance', 'descent', 'climb'].includes(lbl) && rideLogInfo != null) {
+					const dist = rideLogInfo.split(' ');
+					let val = parseFloat(dist[0]);
+
+					if (dist[1] == 'km') {
+						val *= 1000
+					}
+
+					rowInfo[lbl] = String(parseInt(val)) + " m";
+				} else {
+					rowInfo[lbl] = rideLogInfo;
+				}
+
+  		})
+
+  		rideLogs.push(rowInfo);
+  	})
+
+  } catch (error) {
+  	console.error(`ERROR RIDELOGS: ${url} ${error.message}`)
+  }
+	return rideLogs
+}
+
+
+function getData(trailsTh, trailsTr, rideLogs) {
+	const keys = [];
+
+	return trailsTr['rowsInfo'].map((trail, idx) => {
+		const rowInfo = new Object();
+		const row = new Object();
+
+		trail.forEach((trailInfo, idx) => {
+			const lbl = trailsTh[idx];
+
+			// km to m
+			if (['distance', 'descent', 'climb'].includes(lbl) && trailInfo != null) {
+				const dist = trailInfo.split(' ');
+				let val = parseFloat(dist[0]);
+
+				if (dist[1] == 'km') {
+					val *= 1000
+				}
+				rowInfo[lbl] = String(val) + " m";
+			} else {
+				rowInfo[lbl] = trailInfo;
 			}
 		})
 
-		return rowData;
+		rowInfo['rideLogs'] = rideLogs[idx];
 
-	}, tblTitles)
+		var cnt = 1
+		var key = trail[1];
+		while (keys.includes(key)) {
+			key = `${trail[1]}_${cnt}`
+			cnt += 1;
+		} 
 
-	return data
+		keys.push(key);
+		row[key] = rowInfo;
+		return row
+	})
 }
 
-async function loadPage(url) {
-  const browser = await puppeteer.launch({
+
+function saveJsonFile(data) {
+	data.forEach(trail => {
+		const filename = Object.keys(trail)[0].replaceAll(' ', '_').toLowerCase();
+		const trailJSON = JSON.stringify(trail);
+
+		writeFileSync(`${filename}.json`, trailJSON);
+	})
+}
+
+
+async function loadTrails(url) {
+	const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
-  const page = await browser.newPage();
-
-  let data = []
+  let page = await browser.newPage();
 
   try {
-    await page.goto(url);
+  	await page.goto(url);
 
-    let isLastPage = false;
+  	const trailsTh = await getTh(page);
+  	// console.log(trailsTh)
 
-    while (!isLastPage) {
-		const curUrl = page.url();
-		console.log(curUrl);
+  	const trailsTr = await getTr(page);
+  	// console.log(trailsTr)
 
+  	const rideLogs = [];
 
-		const curData = await getData(page);
-		data = [...data, ...curData];
+  	for (const url of trailsTr['rideLogLinks']) {
+  		await page.goto(url);
+  		const curRideLogs = await getRideLogs(page, url);
+  		rideLogs.push(curRideLogs);
+  	};
 
-		const nextBtn = await page.$('#main > div.paging-nav-c3 > ul > li.next-page > a');
-		if (nextBtn) {
-			await nextBtn.click();
-			await page.waitForNavigation();
-		} else {
-			isLastPage = true;
-			console.log("///// last page");
-		}
-    }
+  	const data = getData(trailsTh, trailsTr, rideLogs);
+
+  	saveJsonFile(data);
+
+  	writeFileSync('all_trails.json', JSON.stringify(data));
+
+  	// console.log(data)
+  	// console.dir(data, { depth: null });
+
   } catch (error) {
-    console.error('Error occurred:', error.message);
+  	console.error("ERROR: ", error.message);
   } finally {
-    await browser.close();
-  	console.log(data)
-
-  	const jsonData = JSON.stringify(data);
-  	return jsonData
+  	await browser.close();
   }
 }
 
-loadPage('https://www.trailforks.com/ridelog/all/');
+
+loadTrails('https://www.trailforks.com/region/mill-creek-mountain-bike-trails/trails/');
